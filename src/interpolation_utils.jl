@@ -30,6 +30,8 @@ function findRequiredIdxs!(A::LagrangeInterpolation, t, idx)
 end
 
 function spline_coefficients!(N, d, k, u::Number)
+    # Zero the entire array - required because external code may access indices
+    # outside the non-zero range (e.g., quadratic_spline_params accesses sc[i+1])
     N .= zero(u)
     if u == k[1]
         N[1] = one(u)
@@ -38,7 +40,9 @@ function spline_coefficients!(N, d, k, u::Number)
         N[end] = one(u)
         return length(N):length(N)
     else
-        i = findfirst(x -> x > u, k)::Int - 1
+        # Use binary search (O(log n)) instead of linear search (O(n))
+        # searchsortedlast returns the last index where k[i] <= u
+        i = searchsortedlast(k, u)
         N[i] = one(u)
         for deg in 1:d
             N[i - deg] = (k[i + 1] - u) / (k[i + 1] - k[i - deg + 1]) * N[i - deg + 1]
