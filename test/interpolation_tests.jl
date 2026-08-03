@@ -53,11 +53,14 @@ end
         @test @inferred(output_size(A)) == ()
 
         u = vcat(2.0collect(1:10)', 3.0collect(1:10)')
+        # Julia 1.10 does not infer `I` for matrix `u`: `_integral` gained array
+        # methods, so the element type of the cumulative integral now depends on
+        # inferring them, and 1.10 gives up on one of the two knot types.
         @test @inferred(
             LinearInterpolation(
                 u, t; extrapolation = ExtrapolationType.Extension
             )
-        ) isa LinearInterpolation broken = VERSION < v"1.11" && t isa AbstractRange
+        ) isa LinearInterpolation broken = VERSION < v"1.11" && !(t isa AbstractRange)
         A = LinearInterpolation(
             u, t; extrapolation = ExtrapolationType.Extension
         )
@@ -504,8 +507,7 @@ end
         QuadraticInterpolation(
             u, t; extrapolation = ExtrapolationType.Extension
         )
-    ) isa QuadraticInterpolation broken = VERSION <
-        v"1.11"
+    ) isa QuadraticInterpolation
     A = QuadraticInterpolation(u, t; extrapolation = ExtrapolationType.Extension)
 
     for (_t, _u) in zip(t, eachcol(u))
