@@ -378,6 +378,65 @@ end
         ],
         name = "BSpline Approx (Arclen, Average): AbstractArray"
     )
+
+    # Restricting the B-spline derivative accumulation to the nonzero basis
+    # window must preserve values for every supported u shape and order.
+    @testset "BSpline derivative window matches autodiff / FD" begin
+        t_win = collect(range(0.0, 10.0; length = 40))
+        u_sc = sin.(t_win)
+        u_mat = [sin.(t_win)'; cos.(t_win)']
+        u_vov = [[sin(ti), cos(ti)] for ti in t_win]
+        pts = collect(range(0.25, 9.75; length = 17))
+        cases = (
+            ("Interp scalar", BSplineInterpolation(u_sc, t_win, 3, :Average), true),
+            ("Interp matrix", BSplineInterpolation(u_mat, t_win, 3, :Average), false),
+            ("Interp vov", BSplineInterpolation(u_vov, t_win, 3, :Average), false),
+            ("Approx scalar", BSplineApprox(u_sc, t_win, 3, 12, :Average), true),
+            ("Approx matrix", BSplineApprox(u_mat, t_win, 3, 12, :Average), false),
+            ("Approx vov", BSplineApprox(u_vov, t_win, 3, 12, :Average), false),
+        )
+        for (name, A, is_scalar) in cases
+            @testset "$name" begin
+                for t_eval in pts
+                    d1 = derivative(A, t_eval, 1)
+                    d2 = derivative(A, t_eval, 2)
+                    if is_scalar
+                        @test d1 ≈ ForwardDiff.derivative(A, t_eval) rtol = 1.0e-8 atol = 1.0e-8
+                        @test d2 ≈
+                            ForwardDiff.derivative(τ -> ForwardDiff.derivative(A, τ), t_eval) rtol = 1.0e-6 atol = 1.0e-6
+                    else
+                        @test d1 ≈ central_fdm(5, 1; geom = true)(A, t_eval) rtol = 1.0e-6 atol = 1.0e-6
+                        @test d2 ≈
+                            central_fdm(5, 1; geom = true)(τ -> derivative(A, τ), t_eval) rtol = 1.0e-5 atol = 1.0e-5
+                    end
+                end
+            end
+        end
+    end
+
+    # Performance regression: only m=d basis entries contribute, so a single
+    # derivative must stay O(degree), not O(n) / O(h). Unfixed ≈ few µs at this size.
+    @testset "BSpline derivative window is O(degree)" begin
+        n = 3_000
+        h = 1_000
+        t_big = collect(range(0.0, 100.0; length = n))
+        u_big = sin.(t_big)
+        A = BSplineInterpolation(u_big, t_big, 3, :Average)
+        Aapprox = BSplineApprox(u_big, t_big, 3, h, :Average)
+        t_mid = t_big[n ÷ 2]
+        for _ in 1:200
+            derivative(A, t_mid)
+            derivative(Aapprox, t_mid)
+            derivative(A, t_mid, 2)
+        end
+        ns_d1 = minimum(@elapsed(derivative(A, t_mid)) for _ in 1:500) * 1.0e9
+        ns_da = minimum(@elapsed(derivative(Aapprox, t_mid)) for _ in 1:500) * 1.0e9
+        ns_d2 = minimum(@elapsed(derivative(A, t_mid, 2)) for _ in 1:500) * 1.0e9
+        # Unfixed scales with n/h; fixed ≈ 0.15 / 0.12 / 0.34 µs. Cap at 1 µs.
+        @test ns_d1 < 1000
+        @test ns_da < 1000
+        @test ns_d2 < 1000
+    end
 end
 
 @testset "Cubic Hermite Spline" begin
