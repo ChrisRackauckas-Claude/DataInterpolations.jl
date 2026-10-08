@@ -8,6 +8,30 @@ using CurveFit
 import ForwardDiff
 using LinearAlgebra
 
+mutable struct CountingVector{T, V <: AbstractVector{T}} <: AbstractVector{T}
+    v::V
+    reads::Int
+end
+CountingVector(v) = CountingVector(v, 0)
+Base.size(c::CountingVector) = size(c.v)
+Base.getindex(c::CountingVector, i::Int) = (c.reads += 1; c.v[i])
+function knot_reads(A, t, order)
+    B = if A isa BSplineInterpolation
+        BSplineInterpolation(
+            A.u, A.t, A.d, CountingVector(A.k), A.c, A.sc, A.knotVecType,
+            A.extrapolation_left, A.extrapolation_right, A.t_props,
+        )
+    else
+        BSplineApprox(
+            A.u, A.t, A.d, A.h, CountingVector(A.k), A.c, A.sc, A.knotVecType,
+            A.extrapolation_left, A.extrapolation_right, A.t_props,
+        )
+    end
+    v = derivative(B, t, order)
+    @test v == derivative(A, t, order)
+    return B.k.reads
+end
+
 function test_derivatives(method; args = [], kwargs = [], name::String)
     kwargs_extrapolation = (method == Curvefit) ?
         [:extrapolate => true] :
@@ -414,28 +438,18 @@ end
         end
     end
 
-    # Performance regression: only m=d basis entries contribute, so a single
-    # derivative must stay O(degree), not O(n) / O(h). Unfixed ≈ few µs at this size.
-    @testset "BSpline derivative window is O(degree)" begin
-        n = 3_000
-        h = 1_000
-        t_big = collect(range(0.0, 100.0; length = n))
-        u_big = sin.(t_big)
-        A = BSplineInterpolation(u_big, t_big, 3, :Average)
-        Aapprox = BSplineApprox(u_big, t_big, 3, h, :Average)
-        t_mid = t_big[n ÷ 2]
-        for _ in 1:200
-            derivative(A, t_mid)
-            derivative(Aapprox, t_mid)
-            derivative(A, t_mid, 2)
+    @testset "BSpline derivative reads O(degree) knots" begin
+        for n in (100, 10_000)
+            t = collect(range(0.0, 100.0; length = n))
+            u = sin.(t)
+            for A in (
+                        BSplineInterpolation(u, t, 3, :Average),
+                        BSplineApprox(u, t, 3, n ÷ 3, :Average),
+                    ),
+                    order in (1, 2)
+                @test knot_reads(A, t[n ÷ 2] + 0.01, order) < 200
+            end
         end
-        ns_d1 = minimum(@elapsed(derivative(A, t_mid)) for _ in 1:500) * 1.0e9
-        ns_da = minimum(@elapsed(derivative(Aapprox, t_mid)) for _ in 1:500) * 1.0e9
-        ns_d2 = minimum(@elapsed(derivative(A, t_mid, 2)) for _ in 1:500) * 1.0e9
-        # Unfixed scales with n/h; fixed ≈ 0.15 / 0.12 / 0.34 µs. Cap at 1 µs.
-        @test ns_d1 < 1000
-        @test ns_da < 1000
-        @test ns_d2 < 1000
     end
 end
 
