@@ -1367,7 +1367,7 @@ end
     @test typeof(DataInterpolations.derivative(A32, 1.5f0)) === Float32
     @test typeof(DataInterpolations.integral(A32, 0.5f0, 2.5f0)) === Float32
 
-    # Large-n: quadratic data is reproduced; cached/uncached agree; locator ≡ findfirst
+    # Large-n: quadratic data is reproduced; cached/uncached agree
     rng = StableRNG(42)
     n = 10_000
     t_big = collect(range(0.0, 1.0; length = n))
@@ -1387,10 +1387,15 @@ end
                 DataInterpolations.integral.(Ref(A_cached), t1s, t2s)
         )
     ) <= 1.0e-12
-    @test all(1:(n - 1)) do idx
-        tᵢ₊ = (t_big[idx] + t_big[idx + 1]) / 2
-        searchsortedlast(A_big.k, tᵢ₊) == findfirst(x -> x > tᵢ₊, A_big.k)::Int - 1
-    end
+    # Package-level locator coverage: evaluate at data knots (exact) and at the
+    # segment midpoints that `quadratic_spline_parameters` looks up. Boundary
+    # knots in `A.k` have multiplicity 3; those sites must still hit `u`.
+    @test A_big.(t_big) == u_big
+    @test count(==(t_big[1]), A_big.k) == 3
+    @test count(==(t_big[end]), A_big.k) == 3
+    t_mid = @. (t_big[1:(end - 1)] + t_big[2:end]) / 2
+    @test maximum(abs.(A_big.(t_mid) .- (t_mid .+ 1) .^ 2)) <= 1.0e-12
+    @test A_cached.(t_mid) == A_big.(t_mid)
 end
 
 @testset "CubicSpline Interpolation" begin
