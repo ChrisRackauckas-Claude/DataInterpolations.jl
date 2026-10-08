@@ -7,6 +7,7 @@ using Unitful
 using LinearAlgebra
 using Symbolics
 using StaticArrays: SVector, @SVector
+using OffsetArrays: OffsetArray
 
 function test_interpolation_type(T)
     @test T <: DataInterpolations.AbstractInterpolation
@@ -2155,6 +2156,38 @@ end
         y = interp(x)
         @test y isa Array{Float64, 4}
         @test size(y) == (2, 3, 4, 3)
+    end
+end
+
+@testset "OffsetArray batch safety" begin
+    # The sorted-batch kernels behind `itp(out, ts)` index `out`/`tt` as if they
+    # were one-based; a non-one-based `out` or `ts` must error instead of
+    # silently reading/writing out of bounds (https://github.com/SciML/DataInterpolations.jl, candidate 1).
+    t = collect(1.0:10.0)
+    u = sin.(t)
+    mk = (
+        LinearInterpolation = (u, t) -> LinearInterpolation(u, t),
+        QuadraticInterpolation = (u, t) -> QuadraticInterpolation(u, t),
+        AkimaInterpolation = (u, t) -> AkimaInterpolation(u, t),
+        ConstantInterpolation = (u, t) -> ConstantInterpolation(u, t),
+        QuadraticSpline = (u, t) -> QuadraticSpline(u, t),
+        CubicSpline = (u, t) -> CubicSpline(u, t),
+        CubicHermiteSpline = (u, t) -> CubicHermiteSpline(cos.(t), u, t),
+        QuinticHermiteSpline = (u, t) -> QuinticHermiteSpline(-u, cos.(t), u, t),
+    )
+    q = [1.5, 2.5, 3.5]
+    for (name, f) in pairs(mk)
+        A = f(u, t)
+        ref = A.(q)
+        @testset "$name" begin
+            @test_throws ArgumentError A(zeros(3), OffsetArray(copy(q), 1))
+            @test_throws ArgumentError A(OffsetArray(zeros(3), 1), q)
+            @test_throws ArgumentError A(OffsetArray(zeros(3), 1), OffsetArray(copy(q), 1))
+            # one-based in, one-based out must still produce correct values
+            out = zeros(3)
+            A(out, q)
+            @test out ≈ ref
+        end
     end
 end
 
